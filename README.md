@@ -224,10 +224,14 @@ http://localhost:4000/v1/sql?db=vector|jq
 Vector comes as Debian package. The installation is straight forward.
 
 ```bash
-bash -c "$(curl -Ls https://setup.vector.dev)"
+sudo bash -c "$(curl -Ls https://setup.vector.dev)"
 sudo apt-get install vector
-systemctl enable --now vector
+sudo systemctl enable --now vector
 ```
+
+> [!WARNING]
+> Downloading and executing scripts from the internet without reviewing them - especially when executed as root –
+> is dangerous!
 
 ### Create TLS keys and certificates
 
@@ -245,13 +249,13 @@ openssl genrsa -out server-key.pem 4096
 #Generate server certificate signing request
 openssl req -new -key server-key.pem -out server.csr -subj "/CN=vector"
 #Generate server certificate signed by CA
-openssl x509 -req -days 365 -in server.csr -CA ca-cert.pem -CAkey ca-key.pem -CAcreateserial -out server-cert.pem
+openssl x509 -req -days 999 -in server.csr -CA ca-cert.pem -CAkey ca-key.pem -CAcreateserial -out server-cert.pem
 #Generate client private key
 openssl genrsa -out client-key.pem 4096
 #Generate client certificate signing request
 openssl req -new -key client-key.pem -out client.csr -subj "/CN=vector-client"
 #Generate client certificate signed by CA
-openssl x509 -req -days 365 -in client.csr -CA ca-cert.pem -CAkey ca-key.pem -CAcreateserial -out client-cert.pem
+openssl x509 -req -days 999 -in client.csr -CA ca-cert.pem -CAkey ca-key.pem -CAcreateserial -out client-cert.pem
 #Clean up CSR files
 rm server.csr client.csr
 #Set permission
@@ -332,7 +336,7 @@ Jul 16 11:12:07 my-host vector[193]: √ Health check "greptime_output"
 ### Browse the logs
 
 ```
-mysql -e "SELECT * FROM logs ORDER BY greptime_timestamp DESC LIMIT 2"
+mysql -e "SELECT * FROM logs ORDER BY greptime_timestamp DESC LIMIT 2\G"
 mysql -e "SELECT greptime_timestamp as date,host,message,\`SYSLOG_IDENTIFIER\` \
     FROM logs \
     ORDER BY greptime_timestamp DESC LIMIT 10"
@@ -352,18 +356,29 @@ You will also use Vector for the log collection and forwarding.
 
 The installation is the same as for the server.
 
+
+> [!WARNING]
+> Downloading and executing scripts from the internet without reviewing them - especially when executed as root –
+> is dangerous!
+
 ```bash
-bash -c "$(curl -Ls https://setup.vector.dev)"
+sudo bash -c "$(curl -Ls https://setup.vector.dev)"
 sudo apt-get install vector
-systemctl enable --now vector
+sudo systemctl enable --now vector
 ```
+
+> [!CAUTION]
+> Adding third-party repositories can potentially compromise system security. The repository could theoretically
+> provide malicious versions of system packages. Consider manual installation for production systems.
+
+See hints about manual installation at the bottom of this document.
 
 ### Create a configuration
 
-The below snippet will create a Vector configuration that will continuously read the journal (source) and forward all messages
-matching the condition (transform) to the remote Vector server (sink).
+The below snippet will create a Vector configuration that will continuously read the journal (source) and forward 
+all messages matching the condition (transform) to the remote Vector server (sink).
 
-Replace `address: "<SERVER_IP_OR_HOST_NAME>:3003"` with your Vector server details.
+Replace `address: "<SERVER_IP_OR_HOST_NAME>:<PORT>"` with your Vector server details.
 
 ```bash
 cat << EOF > /etc/vector/vector.yaml
@@ -387,8 +402,11 @@ sinks:
     type: vector
     inputs:
       - my_filter
-    address: "<SERVER_IP_OR_HOST_NAME>:3003"
+    address: "<SERVER_IP_OR_HOST_NAME>:<PORT>"
     compression: true
+    # Disable health check to allow startup when remote vector server is down
+    healthcheck:
+      enabled: false
     tls:
       enabled: true
       ca_file: "/etc/vector/ca-cert.pem"
@@ -672,3 +690,60 @@ Using a Single Client Certificate (Current Setup)
 - Revocation challenges: Cannot revoke access for a single compromised machine without affecting all clients. See above.
 - Lateral movement: An attacker with the certificate can potentially send malicious log entries appearing to come from 
   any machine in your fleet.
+
+### Vector buffering strategy
+
+The suggested Vector configurations (receiver and sender side) doesn't explicitly configure buffering, so Vector uses
+its default buffering strategy. 
+
+What happens on the sender side if the central log server is not available?
+
+- Memory Buffering: Vector buffers events in memory (default: 500 events or 64MB)
+- Event Loss: If memory buffer overflows, events are dropped (data loss occurs)
+- Retry Logic: Vector retries failed connections with exponential backoff
+
+The same default configuration applies to the Vector server if the GreptimeDB goes down.
+
+Moving to disk-based buffering on sender and receiver side may be beneficial to avoid message loss.
+The buffering configuration is part of each sink in the `sinks` section. Look at the following snippet:
+
+```yaml
+sinks:
+  your_sink:
+    ....
+    
+    # Add disk buffering for reliability
+    buffer:
+      type: "disk"
+      max_size: 1073741824     # 1GB
+      when_full: "drop_newest" # Do not block new events when full
+```
+
+Vector uses `/var/lib/vector/buffer` as the default folder for buffering.
+
+Read more about [all buffering options](https://vector.dev/docs/reference/configuration/sinks/vector/#buffer).
+
+### Manual installation of Vector instead of using the repo
+
+Adding a package repository to your machine is a blessing and a curse. Applying updates is handy.
+But the repository can provide packages with the same names as system packages.
+
+A malicious repo could offer bash, sudo, systemd, or even linux-kernel packages.
+If the malicious package has a higher version number, your package manager might install it during updates.
+This is called "dependency confusion" or "package substitution" attacks.
+
+Vector is a static binary with almost no dependencies to other Debian packages. Adding the Vector package repository to
+all your machines is an unnecessary risk.
+
+Installing manually is also an easy task:
+
+```bash
+set -e
+VERSION=0.48.0
+CHECK_SUM=a898f8e44b58ad9b3a87f877dfed160fa469edab1e4cbae5b7700d0ad28a444b
+cd /tmp
+curl -sOL https://github.com/vectordotdev/vector/releases/download/v${VERSION}/vector_${VERSION}-1_amd64.deb
+sha256sum vector_${VERSION}-1_amd64.deb |(grep -q ${CHECK_SUM} || false)
+dpkg -i vector_${VERSION}-1_amd64.deb
+rm vector_${VERSION}-1_amd64.deb
+```
