@@ -273,7 +273,7 @@ scp ca-cert.pem client-cert.pem client-key.pem user@client-machine:/etc/vector/
 > This is a simplified setup that uses a single certificate for all machines (sender side).
 > Consider creating individual certificates.
 
-### Create config
+### Create a Vector configuration
 
 The below example will make Vector listening on TCP 3003 with TLS encryption enabled.
 All incoming log messages will be stored in GreptimeDB using the HTTP interface.
@@ -310,7 +310,12 @@ sinks:
 EOF
 ```
 
-Restart Vector to activate the configuration. Look for errors e.g. vector cannot connect to the database.
+Restart Vector to activate the configuration. Look for errors like Vector cannot connect to the database.
+
+```bash
+systemctl restart vector
+journalctl -u vector
+```
 
 The journal should show you three checkmarks:
 
@@ -334,12 +339,14 @@ mysql -e "SELECT greptime_timestamp as date,host,message,\`SYSLOG_IDENTIFIER\` \
 ```
 
 > [!NOTE]
-> You won't get any results or an error about the missing log table because nobody is delivering messages yet.
+> You won't get any results or you will get an error about the missing log table.
+> This is expected because nobody is delivering messages yet.
 > But you have learned how to query the database.
 
 ## Set up Log Forwarding (Sender Side)
 
-On your fleet of machines, forward relevant logs from the systemd journal to your central Vector server.
+On your fleet of machines, forward relevant logs from the systemd journal to your central Vector server.  
+You will also use Vector for the log collection and forwarding.
 
 ### Install Vector
 
@@ -418,8 +425,8 @@ You should see a process like `journalctl --follow --all --show-cursor ...` run 
 > you can skip this step or come back to it later.
 
 All messages from the journal captured by Vector will have a 'host' field filled with the local short hostname.
-This is returned by the `hostname` command. The machine ID taken from `/etc/machine_id` will also be sent to the remote log.
-server.
+This is returned by the `hostname` command. The machine ID taken from `/etc/machine_id` will also be sent to the
+central log server.
 
 However, these two values may not be sufficient to uniquely identify a host. Vector allows you to enrich the data sent 
 to the central log server with additional fields. This enables you to add a unique identifier, such as an inventory 
@@ -482,19 +489,19 @@ configuration management tool.
 
 ### Test
 
-On the machine where Vector is reading and forwarding the journal messages:
+On the machine where Vector is reading and forwarding the journal messages, create a log message:
 
 ```bash
 logger -t sshd "Sample message to test vector"
 ```
 
-Or from some other machine, try a log in with an invalid password and and invalid users:
+Or from some other machine, try a log in via SSH with an invalid password or an invalid user:
 
 ```bash
 sshpass -p $RANDOM ssh lausbubenstreich@your-server
 ```
 
-Query the GreptimeDB:
+On the central Vector log server, query the GreptimeDB:
 
 ```
 mysql -e "SELECT greptime_timestamp as date,host,message,\`SYSLOG_IDENTIFIER\`,\`_PID\` \
@@ -513,7 +520,7 @@ journalctl -u vector
 
 ### Group messages
 
-A failed log in will create multiple messages. Looking into your GreptimeDB you will get results like the below:
+Failed logins will generate multiple messages. If you look into your GreptimeDB, you will get results like the one below:
 
 ```text
 # mysql -e "SELECT greptime_timestamp as date,host,message,\`_PID\` \
@@ -532,7 +539,7 @@ A failed log in will create multiple messages. Looking into your GreptimeDB you 
 +----------------------------+-------+--------------------------------------------------------------------------------------------------------+------+
 ```
 
-The failed SSH log in has created five messages. Via the `_PID` column you can "group" them.
+The failed SSH login has created five messages. Via the `_PID` column you can "group" them.
 
 Unfortunately GreptimeDB does not support all SQL statement that you are used to from MySQL.
 Joining all messages belonging to the same event with pure SQL is not possible.
@@ -541,7 +548,7 @@ The analysis script will do that for your.
 
 ## Run automated analysis and create alerts (receiver side)
 
-This repository contains a small python script that looks for failed log ins and other event in GreptimeDB.
+This repository contains a small python script that looks for failed logins and other critical events in GreptimeDB.
 
 ### Install analysis script
 
@@ -571,16 +578,19 @@ options:
   --since-last-run     Continue querying starting from the timestamp of last run
 ```
 
-The environment variable `GREPTIMEDB_PASSWORD` is required the database authentication.
-
-Run it for the first time:
+The environment variable `GREPTIMEDB_PASSWORD` is required for the database authentication:
 
 ```bash
 export GREPTIMEDB_PASSWORD=$(grep admin /etc/greptime/users.conf |cut -d= -f2)
+```
+
+Run the script for the first time:
+
+```bash
 ./activity-analysis.py --db-user admin --db-name vector
 ```
 
-You will get a list of event as shown in the following example:
+You will get a list of events as shown in the following example:
 
 ```text
   HOST: daisy (ed880415acc14686870182ec8cc8acad)
@@ -605,7 +615,7 @@ You will get a list of event as shown in the following example:
 ------------------------------------------------------------------------------------------------------------------------
 ```
 
-To create alerts or to forward event to other systems like Zabbix you can use the `--since-last-run`.
+To create alerts or to forward events to other systems like Zabbix you can use the `--since-last-run`.
 
 ```text
 ~# ./activity-analysis.py --db-user admin --db-name vector --since-last-run
