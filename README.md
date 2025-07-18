@@ -386,8 +386,6 @@ cat << EOF > /etc/vector/vector.yaml
 sources:
   systemd_journal:
     type: journald
-    journal_directory: "/run/log/journal"
-    current_boot_only: false
 
 transforms:
   my_filter:
@@ -457,8 +455,6 @@ The below example adds two additional fields.
 sources:
   systemd_journal:
     type: journald
-    journal_directory: "/run/log/journal"
-    current_boot_only: false
 
 transforms:
   add_fields:
