@@ -57,11 +57,12 @@ class GreptimeDBClient:
             `_PID` as pid, 
             MIN(greptime_timestamp) as ts, 
             MIN(`_MACHINE_ID`) as machine_id,
+            MIN(`SYSLOG_IDENTIFIER`) as syslog_identifier,
             host 
         FROM logs
         WHERE 
-            message LIKE '%authentication failure%' AND
-            greptime_timestamp > '{self.since}'
+            ( message ILIKE '%authentication failure%' OR message ILIKE '%invalid user%' )
+            AND greptime_timestamp > '{self.since}'
         GROUP BY `_PID`,host
         ORDER BY ts DESC
         """
@@ -232,7 +233,7 @@ def main():
             date_obj = datetime.fromisoformat(str(event['ts']).replace('Z', '+00:00'))
             print(f"{'HOST':>6}: {event['host']} ({event['machine_id']})")
             print(f"{'DATE':>6}: {date_obj.strftime('%Y-%m-%d')} {date_obj.strftime('%H:%M:%s')}")
-            print(f"{'PID':>6}: {event['pid']}")
+            print(f"{'PID':>6}: {event['pid']} ({event['syslog_identifier']})")
             print(f"{'MSG':>6}: ", end="")
             messages = db_client.get_messages(event['host'], event['pid'])
             print(indent_list(messages, 8))

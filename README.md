@@ -393,7 +393,7 @@ transforms:
     inputs:
       - systemd_journal
     # Forward only messages created by specific applications. 
-    condition: 'includes(["sshd", "sudo", "su"], .SYSLOG_IDENTIFIER)'
+    condition: 'includes(["login", sshd", "sudo", "su"], .SYSLOG_IDENTIFIER)'
 
 sinks:
   remote_vector:
@@ -470,7 +470,7 @@ transforms:
     inputs:
       - add_fields
     # Forward only messages created by specific applications. 
-    condition: 'includes(["sshd", "sudo", "su"], .SYSLOG_IDENTIFIER)'
+    condition: 'includes(["login", "sshd", "sudo", "su"], .SYSLOG_IDENTIFIER)'
 
 sinks:
   remote_vector:
@@ -500,6 +500,20 @@ configuration management tool.
 > [!TIP]
 > Don't care about new columns on the remote servers database. GreptimeDB will create them automatically
 > on receiving data.
+
+### Linux Desktop
+
+If your systems are running a desktop environment like Gnome or KDE authentication failures are logged with
+different syslog identifiers. Extends your vector filter condition with the following `SYSLOG_IDENTIFIER`:
+
+- `gdm-password]` for gnome-based environments
+- `lightdm` KDE LightDM
+- `PackageKit` and `polkit-kde-authentication-agent`
+
+> [!NOTE]
+> The trailing square brace in `gdm-password]` is not an error. This is how gdm logs to the journal.
+> Maybe it's an error in Ubuntu 22.04.. It's highly recommended to check what is logged to the journal
+> while a failed and a successfully login is happening. Use `journalctl -f` to observe the journal in "live mode".
 
 ### Test
 
@@ -646,6 +660,84 @@ This means that you can run the script from cron and pass the results on for fur
 > [!IMPORTANT]
 > On productive use consider storing the timestamp of the last execution in some other directory 
 > than `/var/tmp` by using e.g. `--data-dir /var/lib/activity-analysis`
+
+## GreptimeDB backups and restore
+
+It's important to create backups of your GreptimeDB frequently and store them on some secure location.
+
+### Backup GreptimeDB aka export data
+
+The most straight forward backup is to perform a full export. The full export contains metadata, and all databases.
+It allows you to entirely restore GreptimeDB.
+
+```bash
+mkdir /var/backups/greptime
+chown greptime:greptime /var/backups/greptime/
+su - greptime -s /bin/sh -c "greptime cli data export \
+    --addr localhost:4000 \
+    --auth-basic admin:$(grep admin /etc/greptime/users.conf |cut -d= -f2) \
+    --output-dir /var/backups/greptime/"
+```
+
+Check `greptime cli data export --help` for all export options.
+
+> [!IMPORTANT]
+> Always perform the export from the greptime user account. **Don't do it as root!**
+> The export routine always creates a folder `greptime` inside the `--output-dir`.
+> The example above will store the export in `/var/backups/greptime/greptime`.
+> If you start the export as root the `greptime` folder will be owned by root but the
+> process writing the backup is run from the greptime user and a file permission error occurs.
+
+
+### Incremental backups
+
+If you have created all your databases in append mode, which is the default, nobody can alter or delete records.
+Hence you don't have to export all data everytime you perform a backup.
+
+By appending for example `--start-time "2025-07-19 12:06:00"` to the export command above, on records newer than the
+specified date and time are exported.  
+Sounds handy and easy but for reliable backups without potential data loss you must work with a precision on
+microsecond level. Another challenge is to determine what is the timestamp of the last record in your backup. You will
+need this timestamp as the starting point for the next backup. 
+It's almost impossible to get this timestamp of the last record in your backup because it would require to query all
+databases and all tables for the last record.  
+The solution is to use fixed end times using the `--end-time` command line argument. See the example below:
+
+```bash
+# Read the end time of previos backup and add one microsecond
+START_TIME=<END_TIME+1_MICROSECOND>
+END_TIME=$(date "+%Y-%m-%d %H:%M:%S.00000")
+su - greptime -s /bin/sh -c "greptime cli data export \
+    --addr localhost:4000 \
+    --auth-basic admin:940ddb3a7ebbfd09f5d9 \
+    --output-dir /var/backups/greptime/ \
+    --start-time \"$START_TIME\" \
+    --end-time \"$END_TIME\""
+echo "$END_TIME" > /var/backups/greptime/end-time.txt
+```
+
+### Parallelism
+
+When your GreptimeDB grows, backups can take significant time. Look at the option `--export-jobs <EXPORT_JOBS>`
+(Parallelism of the export, default: 1). Increasing the parallelism might speed up your backup process.
+
+### Restore GreptimeDB aka import data
+
+```bash
+su - greptime -s /bin/sh -c  "greptime cli data import \
+    --addr localhost:4000 \
+    --auth-basic admin:$(grep admin /etc/greptime/users.conf |cut -d= -f2) \
+    --input-dir /var/backups/greptime/"
+```
+
+If you have performed incremental backups, you can restore them in any order. The `import` routine will not
+erase existing data.
+
+Check `greptime cli data import --help` for all export options.
+
+> [!CAUTION]
+> Do not import exported data multiple times. This will insert data again and again without checking for duplicate
+> records. You will mess up your database entirely.
 
 ## Finish (both sides)
 
