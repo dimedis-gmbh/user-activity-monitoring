@@ -54,7 +54,7 @@ criminal intent.
 ```bash
 VERSION="0.15.2"
 wget https://github.com/GreptimeTeam/greptimedb/releases/download/v${VERSION}/greptime-linux-amd64-v${VERSION}.tar.gz
-tar -xzf greptime-linux-amd64-v${VERSION}.tar.gz -C /usr/local/bin --strip-components=2 greptime-linux-amd64-v${VERSION}/greptime
+tar -xzf greptime-linux-amd64-v${VERSION}.tar.gz -C /usr/local/bin --strip-components=1 greptime-linux-amd64-v${VERSION}/greptime
 /usr/local/bin/greptime --version
 rm greptime-linux-amd64-v${VERSION}.tar.gz
 ```
